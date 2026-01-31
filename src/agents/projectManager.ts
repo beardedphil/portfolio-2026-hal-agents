@@ -4,7 +4,7 @@
  */
 
 import { createOpenAI } from '@ai-sdk/openai'
-import { generateText, tool, stepCountIs } from 'ai'
+import { generateText, tool } from 'ai'
 import { z } from 'zod'
 import fs from 'fs/promises'
 import path from 'path'
@@ -226,7 +226,7 @@ export async function runPmAgent(
       system: PM_SYSTEM_INSTRUCTIONS,
       prompt,
       tools,
-      stopWhen: stepCountIs(MAX_TOOL_ITERATIONS),
+      maxSteps: MAX_TOOL_ITERATIONS,
     })
 
     const reply = result.text ?? ''
