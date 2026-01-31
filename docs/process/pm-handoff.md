@@ -4,8 +4,14 @@ This file is for future PM agents working in this repo (`portfolio-2026-hal-agen
 
 ## Role boundaries
 
-- PM agent work: write tickets, run `npm run sync-tickets` after editing `docs/tickets/`, review artifacts, and update `.cursor/rules/`.
+- PM agent work: write tickets, run `npm run sync-tickets` after editing `docs/tickets/`, review artifacts, and update global rules in the HAL superrepo.
 - Implementation agents: implement agent code, create audit artifacts, and handle feature branches + merges.
+
+## Global rules single source of truth
+
+- This repo is intended to be used as a submodule inside `portfolio-2026-hal/`.
+- Authoritative global agent rules live at: `portfolio-2026-hal/.cursor/rules/`.
+- This repo’s `.cursor/rules/` is intentionally a stub (to prevent drift).
 
 ## Common gotchas we hit
 
