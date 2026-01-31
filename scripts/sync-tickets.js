@@ -59,10 +59,10 @@ function extractTitle(content, filename) {
 }
 
 async function main() {
-  const url = process.env.SUPABASE_URL
-  const key = process.env.SUPABASE_ANON_KEY
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
+  const key = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY
   if (!url || !key) {
-    console.error('Set SUPABASE_URL and SUPABASE_ANON_KEY in .env (or env) and run from project root.')
+    console.error('Set SUPABASE_URL/SUPABASE_ANON_KEY (or VITE_SUPABASE_URL/VITE_SUPABASE_ANON_KEY) in .env (or env) and run from project root.')
     process.exit(1)
   }
 
@@ -77,7 +77,7 @@ async function main() {
   for (const name of filenames) {
     const id = extractTicketId(name)
     if (!id) {
-      console.warn(`Skip ${name}: filename must start with 4 digits`)
+      if (name !== 'README.md') console.warn(`Skip ${name}: filename must start with 4 digits`)
       continue
     }
     const filePath = path.join(ticketsDir, name)
