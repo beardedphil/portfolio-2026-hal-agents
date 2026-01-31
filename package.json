@@ -3,6 +3,20 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "main": "src/agents/projectManager.ts",
+  "types": "src/agents/projectManager.ts",
+  "exports": {
+    ".": {
+      "types": "./src/agents/projectManager.ts",
+      "import": "./src/agents/projectManager.ts",
+      "default": "./src/agents/projectManager.ts"
+    },
+    "./projectManager": {
+      "types": "./src/agents/projectManager.ts",
+      "import": "./src/agents/projectManager.ts",
+      "default": "./src/agents/projectManager.ts"
+    }
+  },
   "scripts": {
     "sync-tickets": "node scripts/sync-tickets.js"
   },
