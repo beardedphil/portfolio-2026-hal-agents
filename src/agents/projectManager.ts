@@ -177,7 +177,7 @@ export async function runPmAgent(
   const tools = {
     list_directory: tool({
       description: 'List files in a directory. Path is relative to repo root.',
-      inputSchema: z.object({
+      parameters: z.object({
         path: z.string().describe('Directory path (relative to repo root)'),
       }),
       execute: async (input) => {
@@ -190,9 +190,8 @@ export async function runPmAgent(
     }),
     read_file: tool({
       description: 'Read file contents. Path is relative to repo root. Max 500 lines.',
-      inputSchema: z.object({
+      parameters: z.object({
         path: z.string().describe('File path (relative to repo root)'),
-        maxLines: z.number().optional().describe('Max lines to return (default 500)'),
       }),
       execute: async (input) => {
         const out = await readFile(ctx, input)
@@ -204,9 +203,8 @@ export async function runPmAgent(
     }),
     search_files: tool({
       description: 'Regex search across files. Pattern is JavaScript regex.',
-      inputSchema: z.object({
+      parameters: z.object({
         pattern: z.string().describe('Regex pattern to search for'),
-        glob: z.string().optional().describe('Glob to filter files (e.g. **/*.ts)'),
       }),
       execute: async (input) => {
         const out = await searchFiles(ctx, input)
