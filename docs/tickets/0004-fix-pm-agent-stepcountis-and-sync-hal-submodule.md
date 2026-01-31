@@ -1,6 +1,6 @@
 # Ticket
 
-- **ID**: `0003`
+- **ID**: `0004`
 - **Title**: Fix PM agent runtime error (`stepCountIs`) and sync HAL submodule to real repo
 - **Owner**: Implementation agent
 - **Type**: Bug
@@ -50,7 +50,7 @@ A human can run `npm run dev` in HAL, select **Agent: Project Manager**, send `p
 
 ## Audit artifacts required (implementation agent)
 
-Create `docs/audit/0003-fix-pm-agent-stepcountis-and-sync-hal-submodule/` containing:
+Create `docs/audit/0004-fix-pm-agent-stepcountis-and-sync-hal-submodule/` containing:
 - `plan.md`
 - `worklog.md`
 - `changed-files.md`
