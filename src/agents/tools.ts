@@ -79,8 +79,9 @@ export async function searchFiles(
   ctx: ToolContext,
   input: { pattern: string; glob?: string }
 ): Promise<{ matches: Array<{ path: string; line: number; text: string }> } | { error: string }> {
-  const searchRoot = sandboxPath(ctx.repoRoot, '.')
-  if (!searchRoot) return { error: 'Invalid repo root' }
+  const searchRootRaw = sandboxPath(ctx.repoRoot, '.')
+  if (!searchRootRaw) return { error: 'Invalid repo root' }
+  const searchRoot: string = searchRootRaw
 
   let regex: RegExp
   try {

@@ -3,22 +3,31 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "main": "src/agents/projectManager.ts",
-  "types": "src/agents/projectManager.ts",
+  "main": "dist/agents/projectManager.js",
+  "types": "dist/agents/projectManager.d.ts",
   "exports": {
     ".": {
-      "types": "./src/agents/projectManager.ts",
-      "import": "./src/agents/projectManager.ts",
-      "default": "./src/agents/projectManager.ts"
+      "types": "./dist/agents/projectManager.d.ts",
+      "import": "./dist/agents/projectManager.js",
+      "default": "./dist/agents/projectManager.js"
     },
     "./projectManager": {
-      "types": "./src/agents/projectManager.ts",
-      "import": "./src/agents/projectManager.ts",
-      "default": "./src/agents/projectManager.ts"
+      "types": "./dist/agents/projectManager.d.ts",
+      "import": "./dist/agents/projectManager.js",
+      "default": "./dist/agents/projectManager.js"
+    },
+    "./runner": {
+      "types": "./dist/agents/runner.d.ts",
+      "import": "./dist/agents/runner.js",
+      "default": "./dist/agents/runner.js"
     }
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "sync-tickets": "node scripts/sync-tickets.js"
+  },
+  "devDependencies": {
+    "typescript": "~5.6.0"
   },
   "dependencies": {
     "@ai-sdk/openai": "^1.2.0",
