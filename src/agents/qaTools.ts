@@ -30,14 +30,31 @@ export function createQaTools(config: QaToolsConfig): Record<string, any> {
   // Insert/update QA artifact in Supabase
   tools.insert_qa_artifact = tool({
     description:
-      'Insert or update a QA artifact for a ticket in Supabase. The artifact is stored in the agent_artifacts table and linked to the ticket. Use this after completing QA to store the QA report.',
+      'Insert or update a QA artifact for a ticket in Supabase. The artifact is stored in the agent_artifacts table and linked to the ticket. Use this after completing QA to store the QA report. IMPORTANT: The artifact title must be exactly "QA Report for ticket {TICKET_ID}" (e.g. "QA Report for ticket KANBAN-0001"). Re-running QA for the same ticket will update/replace the existing artifact, ensuring exactly one QA artifact per ticket.',
     parameters: z.object({
-      ticket_id: z.string().describe('Ticket ID (e.g. "0076")'),
-      title: z.string().describe('Artifact title (e.g. "QA report for ticket 0076")'),
-      body_md: z.string().describe('Full markdown content of the QA report'),
+      ticket_id: z.string().describe('Ticket ID (e.g. "KANBAN-0001" or "0001")'),
+      title: z.string().describe('Artifact title. Must be exactly "QA Report for ticket {TICKET_ID}" (e.g. "QA Report for ticket KANBAN-0001")'),
+      body_md: z.string().describe('Full markdown content of the QA report. Must be substantive (not empty and not a placeholder).'),
     }),
     execute: async (input) => {
       try {
+        // Validate that body_md is not empty or just whitespace
+        if (!input.body_md || !input.body_md.trim()) {
+          return {
+            success: false,
+            error: 'QA report body_md cannot be empty. The report must contain substantive content.',
+          }
+        }
+
+        // Validate that body_md is not just a placeholder (basic check - API will do full validation)
+        const trimmedBody = input.body_md.trim().toLowerCase()
+        if (trimmedBody === 'placeholder' || trimmedBody === 'todo' || trimmedBody === 'tbd') {
+          return {
+            success: false,
+            error: 'QA report body_md must contain substantive content, not a placeholder. Please provide the actual QA report text.',
+          }
+        }
+
         const requestBody: any = {
           ticketId: input.ticket_id,
           title: input.title,
@@ -53,21 +70,46 @@ export function createQaTools(config: QaToolsConfig): Record<string, any> {
           body: JSON.stringify(requestBody),
         })
 
+        // Handle HTTP errors
+        if (!response.ok) {
+          let errorMessage = `HTTP ${response.status}: ${response.statusText}`
+          try {
+            const errorResult = await response.json()
+            if (errorResult.error) {
+              errorMessage = errorResult.error
+            }
+          } catch {
+            // If response is not JSON, use the status text
+          }
+          return {
+            success: false,
+            error: `Failed to insert QA artifact: ${errorMessage}. The HAL API rejected the artifact. Please check that the content is substantive and the ticket ID is valid.`,
+          }
+        }
+
         const result = await response.json()
         if (!result.success) {
-          return { success: false, error: result.error || 'Failed to insert QA artifact' }
+          const errorMsg = result.error || 'Failed to insert QA artifact'
+          return {
+            success: false,
+            error: `QA artifact insertion failed: ${errorMsg}. The HAL API rejected the artifact. Please ensure the content is substantive and the ticket ID is correct.`,
+          }
         }
 
         return {
           success: true,
           ticketId: input.ticket_id,
           artifact_id: result.artifact_id,
-          action: result.action,
+          action: result.action || (result.artifact_id ? 'updated' : 'inserted'),
+          message: result.action === 'updated'
+            ? `QA artifact updated successfully for ticket ${input.ticket_id}`
+            : `QA artifact created successfully for ticket ${input.ticket_id}`,
         }
       } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err)
         return {
           success: false,
-          error: err instanceof Error ? err.message : String(err),
+          error: `Failed to insert QA artifact: ${errorMessage}. This may indicate a network error or that the HAL API endpoint is unavailable.`,
         }
       }
     },
