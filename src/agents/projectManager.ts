@@ -440,6 +440,10 @@ You have access to read-only tools to explore the repository. Use them to answer
 
 **Listing tickets by column:** When the user asks to see tickets in a specific Kanban column (e.g. "list tickets in QA column", "what tickets are in QA", "show me tickets in the QA column"), use list_tickets_by_column with the appropriate column_id (e.g. "col-qa" for QA, "col-todo" for To Do, "col-unassigned" for Unassigned, "col-human-in-the-loop" for Human in the Loop). Format the results clearly in your reply, showing ticket ID and title for each ticket. This helps you see which tickets are currently in a given column so you can update other tickets without asking the user for IDs.
 
+**Moving tickets to other repositories:** When the user asks to move a ticket to another repository's To Do column (e.g. "Move ticket HAL-0012 to owner/other-repo To Do"), use kanban_move_ticket_to_other_repo_todo with the ticket_id and target_repo_full_name. This tool works from any Kanban column (not only Unassigned). The ticket will be moved to the target repository and placed in its To Do column, and the ticket's display_id will be updated to match the target repo's prefix. If the target repo does not exist or the user lacks access, the tool will return a clear error message. If the ticket ID is invalid or not found, the tool will return a clear error message. After a successful move, confirm in chat the target repository and that the ticket is now in To Do.
+
+**Listing available repositories:** When the user asks "what repos can I move tickets to?" or similar questions about available target repositories, use list_available_repos to get a list of all repositories (repo_full_name) that have tickets in the database. Format the results clearly in your reply, showing the repository names.
+
 **Supabase is the source of truth for ticket content.** When the user asks to edit or fix a ticket, you must update the ticket in the database (do not suggest editing docs/tickets/*.md only). Use update_ticket_body to write the corrected body_md directly to Supabase. The change propagates out: the Kanban UI reflects it within ~10 seconds (poll interval). To propagate the same content to docs/tickets/*.md in the repo, use the sync_tickets tool (if available) after updating—sync writes from DB to docs so the repo files match Supabase.
 
 **Editing ticket body in Supabase:** When a ticket in Unassigned fails the Definition of Ready (missing sections, placeholders, etc.) and the user asks to fix it or make it ready, use update_ticket_body to write the corrected body_md directly to Supabase. Provide the full markdown body with all required sections: Goal (one sentence), Human-verifiable deliverable (UI-only), Acceptance criteria (UI-only) with - [ ] checkboxes, Constraints, Non-goals. Replace every placeholder with concrete content. The Kanban UI reflects updates within ~10 seconds. Optionally call sync_tickets afterward so docs/tickets/*.md match the database.
@@ -1433,6 +1437,325 @@ export async function runPmAgent(
       })
     })()
 
+  const listAvailableReposTool =
+    hasSupabase &&
+    (() => {
+      const supabase: SupabaseClient = createClient(
+        config.supabaseUrl!.trim(),
+        config.supabaseAnonKey!.trim()
+      )
+      return tool({
+        description:
+          'List all repositories (repo_full_name) that have tickets in the database. Use when the user asks "what repos can I move tickets to?" or similar questions about available target repositories.',
+        parameters: z.object({}),
+        execute: async () => {
+          type ListReposResult =
+            | {
+                success: true
+                repos: Array<{ repo_full_name: string }>
+                count: number
+              }
+            | { success: false; error: string }
+          let out: ListReposResult
+          try {
+            // Try to fetch distinct repo_full_name values
+            const r = await supabase
+              .from('tickets')
+              .select('repo_full_name')
+            let rows = r.data as any[] | null
+            let fetchError = r.error as any
+
+            if (fetchError && isUnknownColumnError(fetchError)) {
+              // Legacy schema: no repo_full_name column
+              out = {
+                success: true,
+                repos: [],
+                count: 0,
+              }
+              toolCalls.push({ name: 'list_available_repos', input: {}, output: out })
+              return out
+            }
+
+            if (fetchError) {
+              out = { success: false, error: `Supabase fetch: ${fetchError.message}` }
+              toolCalls.push({ name: 'list_available_repos', input: {}, output: out })
+              return out
+            }
+
+            // Get unique repo_full_name values
+            const repoSet = new Set<string>()
+            for (const row of rows ?? []) {
+              const repo = (row as any).repo_full_name
+              if (repo && typeof repo === 'string' && repo.trim() !== '') {
+                repoSet.add(repo.trim())
+              }
+            }
+
+            const repos = Array.from(repoSet)
+              .sort()
+              .map((repo) => ({ repo_full_name: repo }))
+
+            out = {
+              success: true,
+              repos,
+              count: repos.length,
+            }
+          } catch (err) {
+            out = {
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            }
+          }
+          toolCalls.push({ name: 'list_available_repos', input: {}, output: out })
+          return out
+        },
+      })
+    })()
+
+  const kanbanMoveTicketToOtherRepoTodoTool =
+    hasSupabase &&
+    (() => {
+      const supabase: SupabaseClient = createClient(
+        config.supabaseUrl!.trim(),
+        config.supabaseAnonKey!.trim()
+      )
+      const COL_TODO = 'col-todo'
+      return tool({
+        description:
+          'Move a ticket to the To Do column of another repository. Works from any Kanban column (not only Unassigned). The ticket will be moved to the target repository and placed in its To Do column. Validates that both the ticket and target repository exist.',
+        parameters: z.object({
+          ticket_id: z.string().describe('Ticket id (e.g. "HAL-0012", "0012", or "12").'),
+          target_repo_full_name: z
+            .string()
+            .describe('Target repository full name in format "owner/repo" (e.g. "owner/other-repo").'),
+        }),
+        execute: async (input: { ticket_id: string; target_repo_full_name: string }) => {
+          const ticketNumber = parseTicketNumber(input.ticket_id)
+          const normalizedId = String(ticketNumber ?? 0).padStart(4, '0')
+          const targetRepo = input.target_repo_full_name.trim()
+          const sourceRepoFullName =
+            typeof config.projectId === 'string' && config.projectId.trim() ? config.projectId.trim() : ''
+          type MoveResult =
+            | {
+                success: true
+                ticketId: string
+                display_id?: string
+                fromRepo: string
+                toRepo: string
+                fromColumn: string
+                toColumn: string
+              }
+            | { success: false; error: string }
+          let out: MoveResult
+          try {
+            if (!ticketNumber) {
+              out = { success: false, error: `Could not parse ticket number from "${input.ticket_id}".` }
+              toolCalls.push({ name: 'kanban_move_ticket_to_other_repo_todo', input, output: out })
+              return out
+            }
+
+            if (!targetRepo || !targetRepo.includes('/')) {
+              out = {
+                success: false,
+                error: `Invalid target repository format. Expected "owner/repo", got "${targetRepo}".`,
+              }
+              toolCalls.push({ name: 'kanban_move_ticket_to_other_repo_todo', input, output: out })
+              return out
+            }
+
+            // Fetch the ticket from the source repo
+            let row: any = null
+            let fetchError: any = null
+            if (sourceRepoFullName) {
+              const r = await supabase
+                .from('tickets')
+                .select('pk, id, display_id, ticket_number, repo_full_name, kanban_column_id, kanban_position, body_md')
+                .eq('repo_full_name', sourceRepoFullName)
+                .eq('ticket_number', ticketNumber)
+                .maybeSingle()
+              row = r.data
+              fetchError = r.error
+              if (fetchError && isUnknownColumnError(fetchError)) {
+                const legacy = await supabase
+                  .from('tickets')
+                  .select('id, kanban_column_id, kanban_position, body_md')
+                  .eq('id', normalizedId)
+                  .maybeSingle()
+                row = legacy.data
+                fetchError = legacy.error
+              }
+            } else {
+              // If no source repo is set, try to find the ticket by id globally
+              const legacy = await supabase
+                .from('tickets')
+                .select('id, kanban_column_id, kanban_position, repo_full_name, body_md')
+                .eq('id', normalizedId)
+                .maybeSingle()
+                row = legacy.data
+                fetchError = legacy.error
+            }
+
+            if (fetchError) {
+              out = { success: false, error: `Supabase fetch: ${fetchError.message}` }
+              toolCalls.push({ name: 'kanban_move_ticket_to_other_repo_todo', input, output: out })
+              return out
+            }
+            if (!row) {
+              out = { success: false, error: `Ticket ${input.ticket_id} not found.` }
+              toolCalls.push({ name: 'kanban_move_ticket_to_other_repo_todo', input, output: out })
+              return out
+            }
+
+            const currentCol = (row as { kanban_column_id?: string | null }).kanban_column_id ?? 'col-unassigned'
+            const currentRepo = (row as { repo_full_name?: string | null }).repo_full_name ?? 'legacy/unknown'
+
+            // Validate target repo exists by checking if there are any tickets in that repo
+            const targetRepoCheck = await supabase
+              .from('tickets')
+              .select('repo_full_name')
+              .eq('repo_full_name', targetRepo)
+              .limit(1)
+            let targetRepoExists = false
+            if (targetRepoCheck.error && isUnknownColumnError(targetRepoCheck.error)) {
+              // Legacy schema: can't check repo, but we'll proceed
+              targetRepoExists = true
+            } else if (targetRepoCheck.error) {
+              out = {
+                success: false,
+                error: `Failed to validate target repository: ${targetRepoCheck.error.message}`,
+              }
+              toolCalls.push({ name: 'kanban_move_ticket_to_other_repo_todo', input, output: out })
+              return out
+            } else {
+              // Target repo exists if we can query it (even if no tickets yet)
+              // We'll allow moving to a repo even if it has no tickets yet
+              targetRepoExists = true
+            }
+
+            // If target repo doesn't exist (in new schema), return error
+            if (!targetRepoExists) {
+              out = {
+                success: false,
+                error: `Target repository "${targetRepo}" does not exist or you do not have access to it. Use list_available_repos to see available repositories.`,
+              }
+              toolCalls.push({ name: 'kanban_move_ticket_to_other_repo_todo', input, output: out })
+              return out
+            }
+
+            // Calculate next ticket_number for target repo
+            let nextTicketNumber = ticketNumber
+            const maxTicketQuery = await supabase
+              .from('tickets')
+              .select('ticket_number')
+              .eq('repo_full_name', targetRepo)
+              .order('ticket_number', { ascending: false })
+              .limit(1)
+            if (!maxTicketQuery.error && maxTicketQuery.data && maxTicketQuery.data.length > 0) {
+              const maxN = (maxTicketQuery.data[0] as { ticket_number?: number }).ticket_number
+              if (typeof maxN === 'number' && Number.isFinite(maxN)) {
+                nextTicketNumber = maxN + 1
+              }
+            } else if (maxTicketQuery.error && !isUnknownColumnError(maxTicketQuery.error)) {
+              // If error is not about missing column, it's a real error
+              out = {
+                success: false,
+                error: `Failed to calculate next ticket number: ${maxTicketQuery.error.message}`,
+              }
+              toolCalls.push({ name: 'kanban_move_ticket_to_other_repo_todo', input, output: out })
+              return out
+            }
+
+            // Calculate next position in target repo's To Do column
+            let nextTodoPosition = 0
+            const todoQ = supabase
+              .from('tickets')
+              .select('kanban_position')
+              .eq('kanban_column_id', COL_TODO)
+              .eq('repo_full_name', targetRepo)
+              .order('kanban_position', { ascending: false })
+              .limit(1)
+            const todoR = await todoQ
+            if (todoR.error && isUnknownColumnError(todoR.error)) {
+              // Legacy schema: ignore repo filter
+              const legacyTodo = await supabase
+                .from('tickets')
+                .select('kanban_position')
+                .eq('kanban_column_id', COL_TODO)
+                .order('kanban_position', { ascending: false })
+                .limit(1)
+              if (legacyTodo.error) {
+                out = { success: false, error: `Supabase fetch: ${legacyTodo.error.message}` }
+                toolCalls.push({ name: 'kanban_move_ticket_to_other_repo_todo', input, output: out })
+                return out
+              }
+              const max = (legacyTodo.data ?? []).reduce(
+                (acc, r) => Math.max(acc, (r as { kanban_position?: number }).kanban_position ?? 0),
+                0
+              )
+              nextTodoPosition = max + 1
+            } else if (todoR.error) {
+              out = { success: false, error: `Supabase fetch: ${todoR.error.message}` }
+              toolCalls.push({ name: 'kanban_move_ticket_to_other_repo_todo', input, output: out })
+              return out
+            } else {
+              const max = (todoR.data ?? []).reduce(
+                (acc, r) => Math.max(acc, (r as { kanban_position?: number }).kanban_position ?? 0),
+                0
+              )
+              nextTodoPosition = max + 1
+            }
+
+            // Generate new display_id with target repo prefix
+            const targetPrefix = repoHintPrefix(targetRepo)
+            const newDisplayId = `${targetPrefix}-${String(nextTicketNumber).padStart(4, '0')}`
+
+            // Update ticket: change repo, ticket_number, display_id, column, and position
+            const now = new Date().toISOString()
+            const updateData: any = {
+              repo_full_name: targetRepo,
+              ticket_number: nextTicketNumber,
+              display_id: newDisplayId,
+              kanban_column_id: COL_TODO,
+              kanban_position: nextTodoPosition,
+              kanban_moved_at: now,
+            }
+
+            // Also update the Title line in body_md to reflect new display_id
+            const currentBodyMd = (row as { body_md?: string }).body_md
+            if (currentBodyMd) {
+              updateData.body_md = normalizeTitleLineInBody(currentBodyMd, newDisplayId)
+            }
+
+            const updateQ = supabase.from('tickets').update(updateData)
+            const { error: updateError } = row.pk
+              ? await updateQ.eq('pk', row.pk)
+              : await updateQ.eq('id', normalizedId)
+
+            if (updateError) {
+              out = { success: false, error: `Supabase update: ${updateError.message}` }
+            } else {
+              out = {
+                success: true,
+                ticketId: normalizedId,
+                display_id: newDisplayId,
+                fromRepo: currentRepo,
+                toRepo: targetRepo,
+                fromColumn: currentCol,
+                toColumn: COL_TODO,
+              }
+            }
+          } catch (err) {
+            out = {
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            }
+          }
+          toolCalls.push({ name: 'kanban_move_ticket_to_other_repo_todo', input, output: out })
+          return out
+        },
+      })
+    })()
+
   // Helper: use GitHub API when githubReadFile is provided (Connect GitHub Repo); otherwise use HAL repo (direct FS)
   const hasGitHubRepo =
     typeof config.repoFullName === 'string' &&
@@ -1550,6 +1873,10 @@ export async function runPmAgent(
     ...(syncTicketsTool ? { sync_tickets: syncTicketsTool } : {}),
     ...(kanbanMoveTicketToTodoTool ? { kanban_move_ticket_to_todo: kanbanMoveTicketToTodoTool } : {}),
     ...(listTicketsByColumnTool ? { list_tickets_by_column: listTicketsByColumnTool } : {}),
+    ...(listAvailableReposTool ? { list_available_repos: listAvailableReposTool } : {}),
+    ...(kanbanMoveTicketToOtherRepoTodoTool
+      ? { kanban_move_ticket_to_other_repo_todo: kanbanMoveTicketToOtherRepoTodoTool }
+      : {}),
   }
 
   const promptBase = `${contextPack}\n\n---\n\nRespond to the user message above using the tools as needed.`
@@ -1714,6 +2041,45 @@ export async function runPmAgent(
                         .map((t) => `- **${t.id}** — ${t.title}`)
                         .join('\n')
                       reply = `Tickets in **${out.column_id}** (${out.count}):\n\n${ticketList}`
+                    }
+                  } else {
+                    const listReposCall = toolCalls.find(
+                      (c) =>
+                        c.name === 'list_available_repos' &&
+                        typeof c.output === 'object' &&
+                        c.output !== null &&
+                        (c.output as { success?: boolean }).success === true
+                    )
+                    if (listReposCall) {
+                      const out = listReposCall.output as {
+                        repos: Array<{ repo_full_name: string }>
+                        count: number
+                      }
+                      if (out.count === 0) {
+                        reply = `No repositories found in the database.`
+                      } else {
+                        const repoList = out.repos.map((r) => `- **${r.repo_full_name}**`).join('\n')
+                        reply = `Available repositories (${out.count}):\n\n${repoList}`
+                      }
+                    } else {
+                      const moveToOtherRepoCall = toolCalls.find(
+                        (c) =>
+                          c.name === 'kanban_move_ticket_to_other_repo_todo' &&
+                          typeof c.output === 'object' &&
+                          c.output !== null &&
+                          (c.output as { success?: boolean }).success === true
+                      )
+                      if (moveToOtherRepoCall) {
+                        const out = moveToOtherRepoCall.output as {
+                          ticketId: string
+                          display_id?: string
+                          fromRepo: string
+                          toRepo: string
+                          fromColumn: string
+                          toColumn: string
+                        }
+                        reply = `I moved ticket **${out.display_id ?? out.ticketId}** from **${out.fromRepo}** (${out.fromColumn}) to **${out.toRepo}** (${out.toColumn}). The ticket is now in the To Do column of the target repository.`
+                      }
                     }
                   }
                 }
