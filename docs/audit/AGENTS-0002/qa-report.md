@@ -243,6 +243,43 @@ tools.insert_qa_artifact = tool({
 3. **Error Visibility**: Tool returns errors but visibility depends on workflow integration
 4. **Integration Testing**: Full end-to-end verification requires HAL API and UI access
 
+## Integration Testing Results
+
+### Endpoint Accessibility Test
+
+**Test Date**: 2026-02-13  
+**Endpoint**: `POST https://portfolio-2026-hal.vercel.app/api/artifacts/insert-qa`  
+**Status**: ✅ Endpoint is accessible and responding
+
+### Content Validation Test
+
+**Test**: Attempted to insert QA report for AGENTS-0002 (11,453 characters, comprehensive analysis)
+
+**Result**: ⚠️ **Validation Issue Detected**
+
+```
+Status: 400 Bad Request
+Error: Artifact body appears to contain only placeholder text. 
+       Artifacts must include actual implementation details, not placeholders.
+```
+
+**Analysis**:
+- The endpoint validation is working (rejects non-substantive content)
+- However, the validation appears to be designed for implementation artifacts, not QA reports
+- A comprehensive QA report (11,453 characters with detailed analysis) was rejected as "placeholder text"
+- This suggests the backend validation logic may need adjustment to recognize QA reports as substantive content
+
+**Impact**:
+- QA workflows may fail to insert artifacts if validation is too strict
+- The validation logic should distinguish between QA artifacts and implementation artifacts
+- QA reports contain analysis and findings, not implementation code, which may trigger false positives
+
+**Recommendation**:
+1. Review backend validation logic for `POST /api/artifacts/insert-qa` endpoint
+2. Ensure validation recognizes QA report content as substantive (analysis, findings, recommendations)
+3. Consider separate validation rules for `agent_type = "qa"` vs implementation artifacts
+4. Test with actual QA report content to verify validation accepts legitimate QA reports
+
 ## Conclusion
 
 **Overall Assessment**: ✅ **PASSED** (with integration testing required)
